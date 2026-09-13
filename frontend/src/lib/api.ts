@@ -17,6 +17,23 @@ export async function checkBackendHealth(): Promise<boolean> {
   }
 }
 
+export async function extractDocumentTextApi(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${API_BASE}/api/extract-text`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to extract text from document");
+  }
+
+  const data = await res.json();
+  return data.text || "";
+}
+
 export async function parseAnswerKeyApi(
   file?: File,
   rawContent?: string

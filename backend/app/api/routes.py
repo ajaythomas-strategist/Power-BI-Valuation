@@ -34,6 +34,45 @@ _SESSION_SUMMARIES: Dict[str, BatchEvaluationSummary] = {}
 _SESSION_EXCEL_BYTES: Dict[str, bytes] = {}
 
 
+@router.post("/extract-text")
+async def extract_document_text(file: UploadFile = File(...)):
+    """Extracts human-readable plain text from uploaded DOCX, TXT, MD, JSON files."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    filename = file.filename or ""
+    bytes_data = await file.read()
+
+    # 1. DOCX (Word) format extraction
+    if filename.lower().endswith(".docx") or bytes_data.startswith(b"PK"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(bytes_data)) as z:
+                if "word/document.xml" in z.namelist():
+                    xml_content = z.read("word/document.xml")
+                    tree = ET.fromstring(xml_content)
+                    ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                    paragraphs = []
+                    for p in tree.iter(f"{{{ns_w}}}p"):
+                        texts = [node.text for node in p.iter(f"{{{ns_w}}}t") if node.text]
+                        if texts:
+                            p_str = "".join(texts).strip()
+                            if p_str:
+                                paragraphs.append(p_str)
+                    extracted = "\n\n".join(paragraphs).strip()
+                    if extracted:
+                        return {"text": extracted, "filename": filename}
+        except Exception as e:
+            logger.warning(f"DOCX XML extraction failed: {e}")
+
+    # 2. Text / Markdown / UTF-8 fallback
+    try:
+        text = bytes_data.decode("utf-8-sig", errors="ignore")
+        return {"text": text, "filename": filename}
+    except Exception:
+        return {"text": "", "filename": filename}
+
+
+
 @router.post("/rules/parse-answer-key", response_model=EvaluationRuleSet)
 async def parse_answer_key(
     file: Optional[UploadFile] = File(None),

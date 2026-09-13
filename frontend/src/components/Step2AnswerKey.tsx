@@ -10,7 +10,7 @@ import {
   Code2,
   AlertCircle,
 } from "lucide-react";
-import { parseAnswerKeyApi } from "@/lib/api";
+import { extractDocumentTextApi, parseAnswerKeyApi } from "@/lib/api";
 import { EvaluationRuleSet } from "@/types";
 
 interface Step2Props {
@@ -38,17 +38,31 @@ export const Step2AnswerKey: React.FC<Step2Props> = ({
   const [isParsing, setIsParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
 
-  const handleFileUpload = (file: File) => {
+  const handleFileUpload = async (file: File) => {
     setFileName(file.name);
     setFileSize((file.size / 1024).toFixed(1) + " KB");
     setParseError(null);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      onUpdateText(content);
-    };
-    reader.readAsText(file);
+    try {
+      const extracted = await extractDocumentTextApi(file);
+      if (extracted && extracted.trim()) {
+        onUpdateText(extracted);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const content = e.target?.result as string;
+          onUpdateText(content);
+        };
+        reader.readAsText(file);
+      }
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        onUpdateText(content);
+      };
+      reader.readAsText(file);
+    }
   };
 
   const handleParseAndProceed = async () => {
@@ -147,7 +161,7 @@ export const Step2AnswerKey: React.FC<Step2Props> = ({
           type="file"
           id="ak-file-input"
           className="hidden"
-          accept=".json,.yaml,.yml,.csv,.txt"
+          accept=".json,.yaml,.yml,.csv,.txt,.docx,.doc,.md"
           onChange={(e) => {
             if (e.target.files && e.target.files[0]) {
               handleFileUpload(e.target.files[0]);

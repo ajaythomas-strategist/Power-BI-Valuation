@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import { Upload, FileText, CheckCircle, ArrowRight, Eye, Sparkles } from "lucide-react";
 
+import { extractDocumentTextApi } from "@/lib/api";
+
 interface Step1Props {
   questionPaperText: string;
   onUpdateText: (text: string) => void;
@@ -19,17 +21,37 @@ export const Step1QuestionPaper: React.FC<Step1Props> = ({
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
 
-  const handleFileUpload = (file: File) => {
+  const handleFileUpload = async (file: File) => {
     setFileName(file.name);
     setFileSize((file.size / 1024).toFixed(1) + " KB");
+    setIsExtracting(true);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      onUpdateText(content);
-    };
-    reader.readAsText(file);
+    try {
+      // Use backend extractor for DOCX / document formats
+      const extracted = await extractDocumentTextApi(file);
+      if (extracted && extracted.trim()) {
+        onUpdateText(extracted);
+      } else {
+        // Fallback to text reader
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const content = e.target?.result as string;
+          onUpdateText(content);
+        };
+        reader.readAsText(file);
+      }
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        onUpdateText(content);
+      };
+      reader.readAsText(file);
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -110,13 +132,18 @@ export const Step1QuestionPaper: React.FC<Step1Props> = ({
             Supported formats: Markdown (.md), Plain Text (.txt), Word (.docx), PDF (.pdf)
           </p>
 
-          {fileName && (
+          {isExtracting ? (
+            <div className="inline-flex items-center space-x-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800 font-medium mt-2 animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping" />
+              <span>Extracting document text...</span>
+            </div>
+          ) : fileName ? (
             <div className="inline-flex items-center space-x-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 font-medium mt-2">
               <CheckCircle className="w-4 h-4 text-emerald-600" />
               <span>{fileName}</span>
               <span className="text-emerald-600">({fileSize})</span>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 

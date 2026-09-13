@@ -3,7 +3,7 @@ Integration tests for Evaluation Engine, Batch Scanner, and Excel Exporter.
 """
 import pytest
 from pathlib import Path
-from fixtures.sample_data_generator import (
+from app.services.sample_fixtures import (
     create_sample_dataset_archive,
     get_sample_answer_key,
 )
