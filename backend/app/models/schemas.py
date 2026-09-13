@@ -128,6 +128,16 @@ class PBIPSemanticModel(BaseModel):
     measures: List[PBIPMeasure] = Field(default_factory=list)
     relationships: List[PBIPRelationship] = Field(default_factory=list)
 
+    def all_measures(self) -> List[PBIPMeasure]:
+        result = list(self.measures)
+        seen_names = {m.name.lower() for m in result}
+        for t in self.tables:
+            for m in t.measures:
+                if m.name.lower() not in seen_names:
+                    result.append(m)
+                    seen_names.add(m.name.lower())
+        return result
+
 
 class PBIPProject(BaseModel):
     project_name: str

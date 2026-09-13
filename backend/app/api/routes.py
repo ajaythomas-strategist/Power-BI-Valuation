@@ -100,6 +100,69 @@ async def parse_answer_key(
         raise HTTPException(status_code=422, detail=f"Failed to parse answer key: {str(e)}")
 
 
+@router.post("/rules/from-master-pbip", response_model=EvaluationRuleSet)
+async def generate_rules_from_master_pbip(
+    file: UploadFile = File(...),
+    total_marks: float = Form(100.0),
+):
+    """
+    Accepts a Master/Solution Power BI Project (.zip archive),
+    extracts and parses the model, DAX measures, and visual pages,
+    and automatically synthesizes a complete machine-evaluable EvaluationRuleSet.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    temp_dir = CleanupService.create_temp_workspace()
+    try:
+        content_bytes = await file.read()
+        zip_path = temp_dir / "master_pbip.zip"
+        with open(zip_path, "wb") as f:
+            f.write(content_bytes)
+
+        import zipfile
+        if zipfile.is_zipfile(zip_path):
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(temp_dir / "extracted")
+            scan_dir = temp_dir / "extracted"
+        else:
+            scan_dir = temp_dir
+
+        from app.parsers.pbip_parser import PBIPParser
+        parser = PBIPParser(str(scan_dir), register_no="MASTER_SOLUTION")
+        parsed_project = parser.parse()
+
+        # If direct root didn't find report/model, check first level child directories
+        if not parsed_project.is_valid:
+            for child in scan_dir.iterdir():
+                if child.is_dir():
+                    sub_parser = PBIPParser(str(child), register_no="MASTER_SOLUTION")
+                    sub_project = sub_parser.parse()
+                    if sub_project.is_valid:
+                        parsed_project = sub_project
+                        break
+
+        if not parsed_project.is_valid:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not detect a valid Power BI Project (.Report / .SemanticModel or model.bim/TMDL) inside the uploaded archive. Ensure your solution is saved as a Power BI Project (*.pbip) and zipped."
+            )
+
+        rule_set = AnswerKeyParser.generate_rules_from_pbip(
+            parsed_project,
+            total_marks=total_marks,
+            title=f"Master Solution: {parsed_project.project_name}",
+        )
+        return rule_set
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error generating rules from master PBIP: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to extract rules from Master PBIP: {str(e)}")
+    finally:
+        CleanupService.purge_directory(temp_dir)
+
+
 @router.post("/evaluate/scan-submissions", response_model=ScanResult)
 async def scan_submissions(
     file: Optional[UploadFile] = File(None),

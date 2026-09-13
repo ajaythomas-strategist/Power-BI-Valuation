@@ -58,6 +58,27 @@ export async function parseAnswerKeyApi(
   return res.json();
 }
 
+export async function generateRulesFromMasterPBIPApi(
+  file: File,
+  totalMarks: number = 100.0
+): Promise<EvaluationRuleSet> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("total_marks", totalMarks.toString());
+
+  const res = await fetch(`${API_BASE}/api/rules/from-master-pbip`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to extract rules from master PBIP" }));
+    throw new Error(err.detail || "Failed to extract rules from master PBIP");
+  }
+
+  return res.json();
+}
+
 export async function scanSubmissionsApi(
   zipFile: File,
   sessionId?: string

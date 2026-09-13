@@ -14,6 +14,7 @@ from app.models.schemas import (
     EvaluationRule,
     CriterionRule,
     TargetComponent,
+    PBIPProject,
 )
 
 
@@ -336,3 +337,247 @@ class AnswerKeyParser:
             total_marks=sum(q.marks for q in questions),
             questions=questions,
         )
+
+    @staticmethod
+    def generate_rules_from_pbip(
+        pbip_project: PBIPProject,
+        total_marks: float = 100.0,
+        title: Optional[str] = None,
+    ) -> EvaluationRuleSet:
+        """
+        Synthesizes a complete machine-evaluable EvaluationRuleSet from a Master/Solution PBIP project.
+        Extracts:
+        - Data Model tables and calculated columns
+        - Relationships and foreign key linkages
+        - DAX measures and exact formulas
+        - Visuals across pages with types, axes, legends, values, and filters
+        """
+        questions: List[EvaluationRule] = []
+        all_criteria: List[CriterionRule] = []
+        crit_counter = 1
+
+        # 1. Model Schema & Tables
+        if pbip_project.semantic_model and pbip_project.semantic_model.tables:
+            schema_criteria: List[CriterionRule] = []
+            for tbl in pbip_project.semantic_model.tables:
+                # Table existence check
+                schema_criteria.append(CriterionRule(
+                    id=f"C{crit_counter}",
+                    title=f"Table '{tbl.name}' exists in Semantic Model",
+                    component=TargetComponent.SEMANTIC_MODEL,
+                    target_property="table",
+                    expected_value=tbl.name,
+                    marks=5.0,
+                ))
+                crit_counter += 1
+
+                # Calculated columns
+                for col in tbl.columns:
+                    if col.is_calculated:
+                        schema_criteria.append(CriterionRule(
+                            id=f"C{crit_counter}",
+                            title=f"Calculated Column '{tbl.name}[{col.name}]'",
+                            component=TargetComponent.CALCULATED_COLUMN,
+                            target_property="column",
+                            expected_value=col.name,
+                            marks=5.0,
+                        ))
+                        crit_counter += 1
+
+            if schema_criteria:
+                questions.append(EvaluationRule(
+                    question_id=f"Q{len(questions)+1}",
+                    question_text="Data Model Structure & Schema",
+                    marks=sum(c.marks for c in schema_criteria),
+                    criteria=schema_criteria,
+                    notes="Tables and calculated columns imported from Master Solution Model.",
+                ))
+                all_criteria.extend(schema_criteria)
+
+        # 2. Model Relationships
+        if pbip_project.semantic_model and pbip_project.semantic_model.relationships:
+            rel_criteria: List[CriterionRule] = []
+            for rel in pbip_project.semantic_model.relationships:
+                rel_str = f"{rel.from_table}[{rel.from_column}] -> {rel.to_table}[{rel.to_column}]"
+                rel_criteria.append(CriterionRule(
+                    id=f"C{crit_counter}",
+                    title=f"Relationship: {rel_str}",
+                    component=TargetComponent.RELATIONSHIP,
+                    target_property="relationship",
+                    expected_value=rel_str,
+                    marks=5.0,
+                ))
+                crit_counter += 1
+
+            if rel_criteria:
+                questions.append(EvaluationRule(
+                    question_id=f"Q{len(questions)+1}",
+                    question_text="Data Model Relationships",
+                    marks=sum(c.marks for c in rel_criteria),
+                    criteria=rel_criteria,
+                    notes="Entity relationships and cardinality from Master Solution Model.",
+                ))
+                all_criteria.extend(rel_criteria)
+
+        # 3. DAX Measures
+        if pbip_project.semantic_model:
+            dax_measures = pbip_project.semantic_model.all_measures()
+            if dax_measures:
+                dax_criteria: List[CriterionRule] = []
+                for m in dax_measures:
+                    dax_criteria.append(CriterionRule(
+                        id=f"C{crit_counter}",
+                        title=f"DAX Measure: [{m.name}]",
+                        component=TargetComponent.DAX,
+                        target_property="dax_formula",
+                        expected_value=m.expression,
+                        accepted_variations=[f"Alternative formulation for {m.name}"],
+                        marks=10.0,
+                    ))
+                    crit_counter += 1
+
+                questions.append(EvaluationRule(
+                    question_id=f"Q{len(questions)+1}",
+                    question_text="DAX Measures & Calculations",
+                    marks=sum(c.marks for c in dax_criteria),
+                    criteria=dax_criteria,
+                    notes="Measures and business formulas from Master Solution Model.",
+                ))
+                all_criteria.extend(dax_criteria)
+
+        # 4. Report Visuals by Page
+        if pbip_project.report and pbip_project.report.pages:
+            vis_index = 1
+            for page in pbip_project.report.pages:
+                page_name = page.display_name or page.name
+                for vis in page.visuals:
+                    # Ignore pure textbox/shape decorators with no visual type or fields
+                    if not vis.visual_type or (not vis.x_axis_fields and not vis.y_axis_fields and not vis.values_fields and not vis.legend_fields):
+                        continue
+
+                    vis_criteria: List[CriterionRule] = []
+                    
+                    # 1. Visual Type
+                    vis_title = vis.title or vis.visual_type
+                    vis_criteria.append(CriterionRule(
+                        id=f"C{crit_counter}",
+                        title=f"Visual Type is {vis.visual_type}",
+                        component=TargetComponent.VISUAL,
+                        target_property="visual_type",
+                        expected_value=vis.visual_type,
+                        accepted_variations=[],
+                        marks=5.0,
+                    ))
+                    crit_counter += 1
+
+                    # 2. X-Axis
+                    if vis.x_axis_fields:
+                        x_field = vis.x_axis_fields[0]
+                        vis_criteria.append(CriterionRule(
+                            id=f"C{crit_counter}",
+                            title=f"X-Axis field ({x_field})",
+                            component=TargetComponent.VISUAL,
+                            target_property="x_axis",
+                            expected_value=x_field,
+                            marks=3.0,
+                        ))
+                        crit_counter += 1
+
+                    # 3. Y-Axis
+                    if vis.y_axis_fields:
+                        y_field = vis.y_axis_fields[0]
+                        vis_criteria.append(CriterionRule(
+                            id=f"C{crit_counter}",
+                            title=f"Y-Axis field ({y_field})",
+                            component=TargetComponent.VISUAL,
+                            target_property="y_axis",
+                            expected_value=y_field,
+                            marks=3.0,
+                        ))
+                        crit_counter += 1
+
+                    # 4. Legend
+                    if vis.legend_fields:
+                        leg_field = vis.legend_fields[0]
+                        vis_criteria.append(CriterionRule(
+                            id=f"C{crit_counter}",
+                            title=f"Legend field ({leg_field})",
+                            component=TargetComponent.VISUAL,
+                            target_property="legend",
+                            expected_value=leg_field,
+                            marks=2.0,
+                        ))
+                        crit_counter += 1
+
+                    # 5. Values
+                    if vis.values_fields and not vis.y_axis_fields:
+                        val_field = vis.values_fields[0]
+                        vis_criteria.append(CriterionRule(
+                            id=f"C{crit_counter}",
+                            title=f"Values field ({val_field})",
+                            component=TargetComponent.VISUAL,
+                            target_property="values",
+                            expected_value=val_field,
+                            marks=3.0,
+                        ))
+                        crit_counter += 1
+
+                    # 6. Slicers / Filters
+                    if vis.slicer_fields:
+                        vis_criteria.append(CriterionRule(
+                            id=f"C{crit_counter}",
+                            title=f"Slicer configured on {', '.join(vis.slicer_fields)}",
+                            component=TargetComponent.FILTER_SLICER,
+                            target_property="slicer",
+                            expected_value=vis.slicer_fields[0],
+                            marks=2.0,
+                        ))
+                        crit_counter += 1
+
+                    if vis_criteria:
+                        q_id = f"Q{len(questions)+1}"
+                        questions.append(EvaluationRule(
+                            question_id=q_id,
+                            question_text=f"Visual: {vis_title} on page '{page_name}'",
+                            marks=sum(c.marks for c in vis_criteria),
+                            criteria=vis_criteria,
+                            notes=f"Visual #{vis_index} extracted from {page_name}.",
+                        ))
+                        all_criteria.extend(vis_criteria)
+                        vis_index += 1
+
+        # Fallback if no questions were extracted
+        if not questions:
+            questions.append(EvaluationRule(
+                question_id="Q1",
+                question_text="Power BI Project Evaluation",
+                marks=total_marks,
+                criteria=[CriterionRule(
+                    id="C1",
+                    title="Power BI Project Valid Structure",
+                    component=TargetComponent.VISUAL,
+                    target_property="visual_type",
+                    expected_value="Report",
+                    marks=total_marks,
+                )],
+            ))
+            all_criteria = questions[0].criteria
+
+        # Distribute / scale total marks to match requested total_marks (e.g. 100.0)
+        current_sum = sum(c.marks for c in all_criteria)
+        if current_sum > 0 and abs(current_sum - total_marks) > 0.01:
+            ratio = total_marks / current_sum
+            for c in all_criteria:
+                c.marks = round(c.marks * ratio, 1)
+            # Rebalance questions marks
+            for q in questions:
+                q.marks = round(sum(c.marks for c in q.criteria), 1)
+
+        set_title = title or f"Master Key: {pbip_project.project_name or 'Power BI Project'}"
+        return EvaluationRuleSet(
+            title=set_title,
+            description="Auto-synthesized evaluation rules from Master Solution PBIP project.",
+            total_marks=round(sum(q.marks for q in questions), 1),
+            questions=questions,
+        )
+
