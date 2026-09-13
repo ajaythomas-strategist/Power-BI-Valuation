@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+backend/venv/
+*/venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Next.js
+.next/
+out/
+frontend/.next/
+frontend/out/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment Variables
+.env
+.env*.local
+*.env
+
+# Operating System & IDE
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary directories
+tmp/
+temp/
+/tmp/
+backend/app/__pycache__/
