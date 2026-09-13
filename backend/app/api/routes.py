@@ -106,7 +106,7 @@ async def generate_rules_from_master_pbip(
     total_marks: float = Form(100.0),
 ):
     """
-    Accepts a Master/Solution Power BI Project (.zip archive),
+    Accepts a Master/Solution Power BI Project (.zip archive, .pbip, or .pbix),
     extracts and parses the model, DAX measures, and visual pages,
     and automatically synthesizes a complete machine-evaluable EvaluationRuleSet.
     """
@@ -129,31 +129,77 @@ async def generate_rules_from_master_pbip(
             scan_dir = temp_dir
 
         from app.parsers.pbip_parser import PBIPParser
+        
+        # 1. First attempt: Parse from root or any subfolder containing PBIP / PBIX
         parser = PBIPParser(str(scan_dir), register_no="MASTER_SOLUTION")
         parsed_project = parser.parse()
 
-        # If direct root didn't find report/model, check first level child directories
+        # 2. If not valid, search recursively for any directory containing .pbip, .Report, .SemanticModel, or .pbix
         if not parsed_project.is_valid:
-            for child in scan_dir.iterdir():
-                if child.is_dir():
+            for child in sorted(scan_dir.rglob("*")):
+                if child.is_dir() and not child.name.startswith("__MACOSX"):
                     sub_parser = PBIPParser(str(child), register_no="MASTER_SOLUTION")
                     sub_project = sub_parser.parse()
                     if sub_project.is_valid:
                         parsed_project = sub_project
                         break
 
+        # 3. If still not valid, check if there are any .pbix files in the extracted tree
         if not parsed_project.is_valid:
-            raise HTTPException(
-                status_code=422,
-                detail="Could not detect a valid Power BI Project (.Report / .SemanticModel or model.bim/TMDL) inside the uploaded archive. Ensure your solution is saved as a Power BI Project (*.pbip) and zipped."
-            )
+            pbix_files = [p for p in scan_dir.rglob("*.pbix") if not p.name.startswith("._")]
+            if pbix_files:
+                sub_parser = PBIPParser(str(pbix_files[0].parent), register_no="MASTER_SOLUTION")
+                sub_project = sub_parser.parse()
+                if sub_project.is_valid:
+                    parsed_project = sub_project
 
-        rule_set = AnswerKeyParser.generate_rules_from_pbip(
-            parsed_project,
-            total_marks=total_marks,
-            title=f"Master Solution: {parsed_project.project_name}",
+        # 4. If PBIP/PBIX found, synthesize rules
+        if parsed_project.is_valid:
+            rule_set = AnswerKeyParser.generate_rules_from_pbip(
+                parsed_project,
+                total_marks=total_marks,
+                title=f"Master Solution: {parsed_project.project_name}",
+            )
+            return rule_set
+
+        # 5. Fallback: Check if the zip contains JSON / YAML / DOCX / TXT answer key documents
+        doc_files = [
+            p for p in scan_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in [".json", ".yaml", ".yml", ".docx", ".txt", ".csv"]
+            and not p.name.startswith("._") and not p.name.startswith("__MACOSX")
+        ]
+        for doc in doc_files:
+            try:
+                if doc.suffix.lower() == ".docx":
+                    import xml.etree.ElementTree as ET
+                    with zipfile.ZipFile(doc) as z:
+                        if "word/document.xml" in z.namelist():
+                            xml_content = z.read("word/document.xml")
+                            tree = ET.fromstring(xml_content)
+                            ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                            paragraphs = []
+                            for p in tree.iter(f"{{{ns_w}}}p"):
+                                texts = [node.text for node in p.iter(f"{{{ns_w}}}t") if node.text]
+                                if texts:
+                                    paragraphs.append("".join(texts).strip())
+                            extracted_text = "\n\n".join(paragraphs).strip()
+                            if extracted_text:
+                                return AnswerKeyParser.parse_content(extracted_text, doc.name)
+                else:
+                    text = doc.read_text(encoding="utf-8-sig", errors="ignore")
+                    if text.strip():
+                        return AnswerKeyParser.parse_content(text, doc.name)
+            except Exception as e:
+                logger.warning(f"Fallback doc parse failed for {doc}: {e}")
+
+        # If nothing could be extracted, build informative error message
+        all_found = [str(p.relative_to(scan_dir)) for p in scan_dir.rglob("*") if p.is_file() and not p.name.startswith("._")][:10]
+        files_summary = ", ".join(all_found) if all_found else "Empty archive"
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not find a valid Power BI project (.pbip, .pbix, .Report, .SemanticModel, or answer key document) in the uploaded zip. Files found inside: [{files_summary}]. In Power BI Desktop, use File > Save As > Power BI Project (*.pbip) and upload the zipped folder."
         )
-        return rule_set
+
     except HTTPException:
         raise
     except Exception as e:

@@ -32,18 +32,26 @@ class PBIPParser:
         self.register_no = register_no
 
     def parse(self) -> PBIPProject:
-        """Finds and parses all components of the PBIP project."""
+        """Finds and parses all components of the PBIP / PBIX project."""
         project_name = self._find_project_name()
 
         report = self._parse_report()
         semantic_model = self._parse_semantic_model()
+
+        # If standard PBIP search didn't find report or model, attempt PBIX parsing
+        if not report or not semantic_model:
+            pbix_report, pbix_model = self._parse_pbix_files()
+            if not report:
+                report = pbix_report
+            if not semantic_model:
+                semantic_model = pbix_model
 
         is_valid = True
         error_message = None
 
         if not report and not semantic_model:
             is_valid = False
-            error_message = "Neither Report nor Semantic Model could be found in the student project directory."
+            error_message = "Neither Report nor Semantic Model could be found in the project directory."
 
         return PBIPProject(
             project_name=project_name or self.root_path.name,
@@ -53,6 +61,96 @@ class PBIPParser:
             is_valid=is_valid,
             error_message=error_message,
         )
+
+    def _parse_pbix_files(self) -> Tuple[Optional[PBIPReport], Optional[PBIPSemanticModel]]:
+        """Parses any .pbix files found in the directory."""
+        import zipfile
+        import logging
+        log = logging.getLogger(__name__)
+
+        pbix_candidates: List[Path] = []
+        if self.root_path.is_file() and self.root_path.suffix.lower() in [".pbix", ".zip"]:
+            pbix_candidates.append(self.root_path)
+        else:
+            pbix_candidates.extend(list(self.root_path.rglob("*.pbix")))
+
+        report: Optional[PBIPReport] = None
+        semantic_model: Optional[PBIPSemanticModel] = None
+
+        for pbix_path in pbix_candidates:
+            try:
+                if not zipfile.is_zipfile(pbix_path):
+                    continue
+                with zipfile.ZipFile(pbix_path, "r") as z:
+                    names = z.namelist()
+
+                    # 1. Look for Report/Layout or Layout
+                    layout_name = None
+                    for candidate in ["Report/Layout", "Layout", "report/layout"]:
+                        if candidate in names:
+                            layout_name = candidate
+                            break
+
+                    if layout_name and not report:
+                        raw_bytes = z.read(layout_name)
+                        try:
+                            decoded = raw_bytes.decode("utf-16-le")
+                        except Exception:
+                            decoded = raw_bytes.decode("utf-8", errors="ignore")
+
+                        try:
+                            layout_json = json.loads(decoded)
+                            pages = self._parse_classic_report_json(layout_json)
+                            if pages:
+                                report = PBIPReport(pages=pages, visuals_count=sum(len(p.visuals) for p in pages))
+                        except Exception as e:
+                            log.warning(f"Failed to parse layout JSON from {pbix_path}: {e}")
+
+                    # 2. Look for DataModelSchema (Tabular JSON in .pbix)
+                    for schema_name in ["DataModelSchema", "datamodelschema"]:
+                        if schema_name in names and not semantic_model:
+                            raw_schema = z.read(schema_name)
+                            try:
+                                schema_str = raw_schema.decode("utf-16-le")
+                            except Exception:
+                                schema_str = raw_schema.decode("utf-8", errors="ignore")
+                            try:
+                                schema_json = json.loads(schema_str)
+                                b_tables, b_measures, b_rels = self._parse_bim_data(schema_json.get("model", schema_json))
+                                if b_tables or b_measures or b_rels:
+                                    semantic_model = PBIPSemanticModel(
+                                        tables=b_tables,
+                                        measures=b_measures,
+                                        relationships=b_rels,
+                                    )
+                            except Exception as e:
+                                log.warning(f"Failed to parse DataModelSchema from {pbix_path}: {e}")
+
+                    # 3. If semantic_model is still None, extract referenced tables and fields from report layout
+                    if not semantic_model and report:
+                        inferred_tables: Dict[str, set] = {}
+                        for p in report.pages:
+                            for v in p.visuals:
+                                for f in v.all_referenced_fields:
+                                    clean_f = f.replace("[", "").replace("]", "")
+                                    if "." in clean_f:
+                                        parts = clean_f.split(".", 1)
+                                        t_name = parts[0].strip("'")
+                                        c_name = parts[1].strip("'")
+                                        if t_name not in inferred_tables:
+                                            inferred_tables[t_name] = set()
+                                        inferred_tables[t_name].add(c_name)
+                        if inferred_tables:
+                            pb_tables = [
+                                PBIPTable(name=t_name, columns=[PBIPColumn(name=col) for col in sorted(cols)])
+                                for t_name, cols in inferred_tables.items()
+                            ]
+                            semantic_model = PBIPSemanticModel(tables=pb_tables, measures=[], relationships=[])
+
+            except Exception as e:
+                log.warning(f"Error inspecting PBIX {pbix_path}: {e}")
+
+        return report, semantic_model
 
     def _find_project_name(self) -> str:
         """Looks for .pbip file to extract project name."""

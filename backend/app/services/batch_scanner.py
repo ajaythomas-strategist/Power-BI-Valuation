@@ -95,17 +95,17 @@ class BatchScanner:
                 missing_count += 1
                 continue
 
-            # 2. Check for PBIP file, Report folder, Dataset/SemanticModel folder, or model.bim
             pbip_files = [f for f in non_hidden_files if f.is_file() and f.name.endswith(".pbip")]
+            pbix_files = [f for f in non_hidden_files if f.is_file() and f.name.endswith(".pbix")]
             report_dirs = [f for f in non_hidden_files if f.is_dir() and f.name.endswith(".Report")]
             model_dirs = [f for f in non_hidden_files if f.is_dir() and (f.name.endswith(".Dataset") or f.name.endswith(".SemanticModel"))]
             bim_files = [f for f in non_hidden_files if f.is_file() and f.name == "model.bim"]
             report_json_files = [f for f in non_hidden_files if f.is_file() and f.name == "report.json"]
             tmdl_files = [f for f in non_hidden_files if f.is_file() and f.name.endswith(".tmdl")]
 
-            has_pbip = len(pbip_files) > 0
-            has_report = len(report_dirs) > 0 or len(report_json_files) > 0
-            has_model = len(model_dirs) > 0 or len(bim_files) > 0 or len(tmdl_files) > 0
+            has_pbip = len(pbip_files) > 0 or len(pbix_files) > 0
+            has_report = len(report_dirs) > 0 or len(report_json_files) > 0 or len(pbix_files) > 0
+            has_model = len(model_dirs) > 0 or len(bim_files) > 0 or len(tmdl_files) > 0 or len(pbix_files) > 0
 
             # If none of the Power BI project indicators are found
             if not has_pbip and not has_report and not has_model:
